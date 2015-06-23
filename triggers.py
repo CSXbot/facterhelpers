@@ -28,15 +28,17 @@ def getSettings():
         } 
     if len(args) == 0:
         remoteHost = False
+        targetFQDN = localFQDN
     else:
         if len(args) > 1:
             optionparser.error("You can provide only one optional argument: FQDN")
         elif args[0] == localFQDN:
             remoteHost = False
+            targetFQDN = localFQDN
         else:
             remoteHost = args[0]
-            localFQDN = remoteHost
-    return options, remoteHost, localFQDN, coloursForTriggers
+            targetFQDN = remoteHost
+    return options, remoteHost, targetFQDN, coloursForTriggers
 
 
 def getLocalTriggers():
@@ -92,8 +94,8 @@ def sortTriggersBySeverity (triggers, severities):
 
 def main():
     severities = ['Disaster', 'High', 'Average', 'Warning', 'Info']
-    (options, remoteHost, localFQDN, coloursForTriggers) = getSettings()
-    triggers = getRemoteTriggers(remoteHost) if remoteHost else getLocalTriggers()
+    (options, remoteHost, targetFQDN, coloursForTriggers) = getSettings()
+    triggers = getRemoteTriggers(targetFQDN) if remoteHost else getLocalTriggers()
     if triggers == 'false':
         print (coloursForTriggers['Time'] + "No alerts" + Style.RESET_ALL)
         sys.exit(0)
@@ -102,11 +104,11 @@ def main():
     for severity in severities:
         for trigger in sortedBySeverityTriggers[severity]:
             print (coloursForTriggers['Time'] + "[" + trigger['HumanTime'] + "]" + Style.RESET_ALL),
-            print (" " * (longestTrigger - len(trigger['HumanTime']))), # intend triggers, so they look even
+            print (" " * (longestTrigger - len(trigger['HumanTime']))), # intend triggers for prettier output
             print (coloursForTriggers[severity] + trigger['Trigger'] + Style.RESET_ALL),
-            if trigger['HostCname'] != localFQDN:
+            if trigger['HostCname'] != targetFQDN:
                 print ("(as " + trigger['HostCname'] + ")"),
-            print ""
+            print "" # \n
         if severity == options.maxSeverity: sys.exit(0)
 
 if __name__ == "__main__":
