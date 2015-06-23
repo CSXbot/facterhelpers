@@ -1,7 +1,7 @@
 #!/local/python/bin/python
 
-from Facter import Facter
-import json, sys, socket
+from efacter import Facter
+import json, sys, socket, urllib2
 from optparse import OptionParser
 from colorama import Fore, Back, Style
 from pygments.lexers import JsonLexer
@@ -9,44 +9,52 @@ from pygments.formatters import TerminalFormatter
 from pygments.styles import native
 from operator import itemgetter
 
-usage = "usage: %prog [-n]"
-optionparser = OptionParser(usage=usage)
-
-optionparser.add_option("-s", "--max-severity", dest="maxSeverity", default='Average', action="store",
-                help="Max severity to show: Disaster, High, Average(default), Warning, Info")
-optionparser.add_option("-n", "--no-colour", dest="noColour", default=False, action="store_true",
-                help="Disable colours in the output")
-
-(options, args) = optionparser.parse_args()
-
-severities = ['Disaster', 'High', 'Average', 'Warning', 'Info']
-hostname = socket.getfqdn()
-
-sortedBySeverityTriggers = {}
-for severity in severities:
-    sortedBySeverityTriggers[severity] = []
-
-if options.noColour:
-    coloursForTriggers = { 'Time': '', 'Disaster': '', 'High': '', 'Average': '', 'Warning': '', 'Info': '', }
-else:
+def getSettings():
+    usage = "usage: %prog [-n]"
+    optionparser = OptionParser(usage=usage)
+    optionparser.add_option("-s", "--max-severity", dest="maxSeverity", default='Average', action="store",
+            help="Max severity to show: Disaster, High, Average(default), Warning, Info")
+    optionparser.add_option("-n", "--no-colour", dest="noColour", default=False, action="store_true",
+            help="Disable colours in the output")
+    (options, args) = optionparser.parse_args()
+    localFQDN = socket.getfqdn()
     coloursForTriggers = {
-        'Time': Style.BRIGHT + Fore.GREEN,
-        'Disaster': Style.BRIGHT + Fore.RED,
-        'High': Style.DIM + Fore.RED,
-        'Average': Fore.YELLOW,
-        'Warning': Fore.WHITE,
-        'Info': Fore.BLUE
-        }
+        'Time': Style.BRIGHT + Fore.GREEN if not options.noColour else '',
+        'Disaster': Style.BRIGHT + Fore.RED if not options.noColour else '',
+        'High': Style.DIM + Fore.RED if not options.noColour else '',
+        'Average': Fore.YELLOW if not options.noColour else '',
+        'Warning': Fore.WHITE if not options.noColour else '',
+        'Info': Fore.BLUE if not options.noColour else '',
+        } 
+    if len(args) == 0:
+        remoteHost = False
+    else:
+        if len(args) > 1:
+            optionparser.error("You can provide only one optional argument: FQDN")
+        elif args[0] == localFQDN:
+            remoteHost = False
+        else:
+            remoteHost = args[0]
+            localFQDN = remoteHost
+    return options, remoteHost, localFQDN, coloursForTriggers
 
-longestTrigger = 0 # We will use this variable to count intend from time field
 
-facter = Facter(['zabbix_triggers'])
-triggers = facter.allFacts()['zabbix_triggers']
-if triggers == 'false':
-    print (coloursForTriggers['Time'] + "No alerts" + Style.RESET_ALL)
-    sys.exit(0)
+def getLocalTriggers():
+    facter = Facter(['zabbix_triggers'])
+    triggers = facter.allFacts()['zabbix_triggers']
+    return triggers
 
-def humanTime(sec_elapsed):
+def getRemoteTriggers(remoteHost):
+    url = "http://zbx.mlan/triggers/"+remoteHost+".json"
+    file_stream = urllib2.urlopen(url).read().rstrip('\n')
+    try:
+        json_fact = json.loads(file_stream)
+    except ValueError, e:
+        print >> sys.stderr, "Can't load triggers"
+        sys.exit(1)
+    return json_fact['zabbix_triggers']
+
+def secondsToHumanTime(sec_elapsed):
     result = ''
     w = int(sec_elapsed / 604800)
     if w > 0: result += str(w) + "w " # weeks
@@ -60,26 +68,46 @@ def humanTime(sec_elapsed):
     # We do not need seconds, update time is ~2 minutes anyway
     return result
 
-for host in triggers.keys():
-    triggersForHost = triggers[host]
-    for trigger in triggersForHost.keys():
-        if triggersForHost[trigger]['Time'] > longestTrigger: longestTrigger = triggersForHost[trigger]['Time']
-        sortedBySeverityTriggers[triggersForHost[trigger]['Severity']].append(
+
+def sortTriggersBySeverity (triggers, severities):
+    sortedBySeverityTriggers = {severity: []
+            for severity in severities}
+    longestTrigger = 0 # We will use this variable to count intend from time field
+    for host, triggersForHost in triggers.iteritems():
+        for trigger, triggerProperties in triggersForHost.iteritems():
+            humanTime = secondsToHumanTime(triggerProperties['Time'])
+            if len(humanTime) > longestTrigger:
+                longestTrigger = len(humanTime)
+            sortedBySeverityTriggers[triggerProperties['Severity']].append(
                     {
-                    'Trigger': trigger,
-                    'Time': triggersForHost[trigger]['Time'],
-                    'HostCname': host,
+                        'Trigger': trigger,
+                        'Time': triggerProperties['Time'],
+                        'HumanTime': humanTime,
+                        'HostCname': host,
                     }
                 )
-longestTrigger = len(humanTime(longestTrigger)) # we need the length of the longest time string on a screen
+    for severity in severities:
+        sortedBySeverityTriggers[severity] = sorted(sortedBySeverityTriggers[severity], key=itemgetter('Time'))
+    return sortedBySeverityTriggers, longestTrigger
 
-for severity in severities:
-    sortedBySeverityTriggers[severity] = sorted(sortedBySeverityTriggers[severity], key=itemgetter('Time'))
-    for trigger in sortedBySeverityTriggers[severity]:
-        print (coloursForTriggers['Time'] + "[" + humanTime(trigger['Time']) + "]" + Style.RESET_ALL),
-        print (" " * (longestTrigger - len(humanTime(trigger['Time'])))), # intend triggers, so they look even
-        print (coloursForTriggers[severity] + trigger['Trigger'] + Style.RESET_ALL),
-        if trigger['HostCname'] != hostname:
-            print ("(as " + trigger['HostCname'] + ")"),
-        print ""
-    if severity == options.maxSeverity: sys.exit(0)
+def main():
+    severities = ['Disaster', 'High', 'Average', 'Warning', 'Info']
+    (options, remoteHost, localFQDN, coloursForTriggers) = getSettings()
+    triggers = getRemoteTriggers(remoteHost) if remoteHost else getLocalTriggers()
+    if triggers == 'false':
+        print (coloursForTriggers['Time'] + "No alerts" + Style.RESET_ALL)
+        sys.exit(0)
+    (sortedBySeverityTriggers, longestTrigger) = sortTriggersBySeverity (triggers, severities)
+
+    for severity in severities:
+        for trigger in sortedBySeverityTriggers[severity]:
+            print (coloursForTriggers['Time'] + "[" + trigger['HumanTime'] + "]" + Style.RESET_ALL),
+            print (" " * (longestTrigger - len(trigger['HumanTime']))), # intend triggers, so they look even
+            print (coloursForTriggers[severity] + trigger['Trigger'] + Style.RESET_ALL),
+            if trigger['HostCname'] != localFQDN:
+                print ("(as " + trigger['HostCname'] + ")"),
+            print ""
+        if severity == options.maxSeverity: sys.exit(0)
+
+if __name__ == "__main__":
+    sys.exit(main())
