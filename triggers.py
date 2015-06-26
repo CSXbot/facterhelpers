@@ -8,6 +8,7 @@ from pygments.lexers import JsonLexer
 from pygments.formatters import TerminalFormatter
 from pygments.styles import native
 from operator import itemgetter
+import dns.resolver
 
 def getSettings():
     usage = "usage: %prog [-n]"
@@ -47,14 +48,28 @@ def getLocalTriggers():
     return triggers
 
 def getRemoteTriggers(remoteHost):
+    DNS = checkDNSName(remoteHost)
+    if DNS == "NXDOMAIN":
+        print >> sys.stderr, "There is no such domain: " + remoteHost
+        sys.exit(1)
+    else:
+        remoteHost = str(DNS).rstrip('.')
     url = "http://zbx.mlan/triggers/"+remoteHost+".json"
-    file_stream = urllib2.urlopen(url).read().rstrip('\n')
+    HTTPResponce = urllib2.urlopen(url)
+    file_stream = HTTPResponce.read().rstrip('\n')
     try:
         json_fact = json.loads(file_stream)
     except ValueError, e:
         print >> sys.stderr, "Can't load triggers"
         sys.exit(1)
     return json_fact['zabbix_triggers']
+
+def checkDNSName(name):
+    try:
+        answer = dns.resolver.query(name)
+    except dns.resolver.NXDOMAIN:
+        return "NXDOMAIN"
+    return answer.canonical_name
 
 def secondsToHumanTime(sec_elapsed):
     result = ''
@@ -74,12 +89,9 @@ def secondsToHumanTime(sec_elapsed):
 def sortTriggersBySeverity (triggers, severities):
     sortedBySeverityTriggers = {severity: []
             for severity in severities}
-    longestTrigger = 0 # We will use this variable to count intend from time field
     for host, triggersForHost in triggers.iteritems():
         for trigger, triggerProperties in triggersForHost.iteritems():
             humanTime = secondsToHumanTime(triggerProperties['Time'])
-            if len(humanTime) > longestTrigger:
-                longestTrigger = len(humanTime)
             sortedBySeverityTriggers[triggerProperties['Severity']].append(
                     {
                         'Trigger': trigger,
@@ -90,7 +102,7 @@ def sortTriggersBySeverity (triggers, severities):
                 )
     for severity in severities:
         sortedBySeverityTriggers[severity] = sorted(sortedBySeverityTriggers[severity], key=itemgetter('Time'))
-    return sortedBySeverityTriggers, longestTrigger
+    return sortedBySeverityTriggers
 
 def main():
     severities = ['Disaster', 'High', 'Average', 'Warning', 'Info']
@@ -99,9 +111,17 @@ def main():
     if triggers == 'false':
         print (coloursForTriggers['Time'] + "No alerts" + Style.RESET_ALL)
         sys.exit(0)
-    (sortedBySeverityTriggers, longestTrigger) = sortTriggersBySeverity (triggers, severities)
+    sortedBySeverityTriggers = sortTriggersBySeverity (triggers, severities)
 
-    triggerDisplayedCounter = 0
+    longestTrigger = 0 # We will use this variable to count padding length
+    for severity in severities:
+        for trigger in sortedBySeverityTriggers[severity]:
+            if len(trigger['HumanTime']) > longestTrigger:
+                longestTrigger = len(trigger['HumanTime'])
+        if severity == options.maxSeverity:
+            break
+
+    triggerDisplayedCounter = 0 # Did we actially show anything?
     for severity in severities:
         for trigger in sortedBySeverityTriggers[severity]:
             print (coloursForTriggers['Time'] + "[" + trigger['HumanTime'] + "]" + Style.RESET_ALL),
@@ -112,7 +132,7 @@ def main():
             print "" # \n
             triggerDisplayedCounter += 1
         if severity == options.maxSeverity:
-            if triggerDisplayedCounter < 1:
+            if triggerDisplayedCounter < 1: # If we didn't show anything, let's tell about other, less severe, triggers
                 print (coloursForTriggers['Time'] + "No alerts" + Style.RESET_ALL)
                 print "+triggers with severity below %s" % options.maxSeverity
             sys.exit(0)
