@@ -101,6 +101,7 @@ def main():
         sys.exit(0)
     (sortedBySeverityTriggers, longestTrigger) = sortTriggersBySeverity (triggers, severities)
 
+    triggerDisplayedCounter = 0
     for severity in severities:
         for trigger in sortedBySeverityTriggers[severity]:
             print (coloursForTriggers['Time'] + "[" + trigger['HumanTime'] + "]" + Style.RESET_ALL),
@@ -109,7 +110,12 @@ def main():
             if trigger['HostCname'] != targetFQDN:
                 print ("(as " + trigger['HostCname'] + ")"),
             print "" # \n
-        if severity == options.maxSeverity: sys.exit(0)
+            triggerDisplayedCounter += 1
+        if severity == options.maxSeverity:
+            if triggerDisplayedCounter < 1:
+                print (coloursForTriggers['Time'] + "No alerts" + Style.RESET_ALL)
+                print "+triggers with severity below %s" % options.maxSeverity
+            sys.exit(0)
 
 if __name__ == "__main__":
     sys.exit(main())
